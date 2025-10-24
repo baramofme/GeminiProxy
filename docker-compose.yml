@@ -3,8 +3,8 @@ services:
   app:
     image: dreamhartley705/jimihub:latest
     container_name: jimihub
-    ports:
-      - "3000:3000"
+    #ports:
+    #  - "3000:3000"
     env_file:
       - .env
     volumes:
