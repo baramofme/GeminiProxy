@@ -6,7 +6,13 @@ services:
     #ports:
     #  - "3000:3000"
     env_file:
-      - .env
+      #- .env
+      # 호스트 쉘 환경 변수 DB_PASSWORD의 값을 가져와 컨테이너에 전달
+      - DB_PASSWORD=${DB_PASSWORD}
+      - PORT=${PORT}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
+      - GEMINI_BASE_URL=${GEMINI_BASE_URL}
     volumes:
       - ./data:/app/data
     networks:
