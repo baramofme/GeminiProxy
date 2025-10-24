@@ -5,8 +5,9 @@ services:
     container_name: jimihub
     #ports:
     #  - "3000:3000"
-    env_file:
+    #env_file:
       #- .env
+    environment:
       # 호스트 쉘 환경 변수의 값을 가져와 컨테이너에 전달
       - PORT=${PORT}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
