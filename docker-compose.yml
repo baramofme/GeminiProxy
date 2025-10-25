@@ -1,20 +1,13 @@
 version: '3.8' 
 services:
   app:
-    # image: dreamhartley705/jimihub:latest
     image: node:lts-slim
     container_name: jimihub
     working_dir: /app  
-    #ports:
-    #  - "3000:3000"
     volumes:
-      - ./:/app          # 현재 디렉토리 전체를 /app에 마운트
-      - geminiproxy-db:/app/data      # 볼륨 이름:컨테이너 경로(여기가 database.db 들어가는 경로)
-      - ../files/insert_data.sql:/app/data/insert_data.sql
-      # - ./data:/app/data
+      - ./:/app  
+      - ../files/database.db:/app/data/database.db
     command: /bin/sh -c "apt update && apt install sqlite3 -y && sqlite3 /app/data/database.db < /app/data/insert_data.sql && npm install --only=production && npm start"
-    #env_file:
-      #- .env
     environment:
       # 호스트 쉘 환경 변수의 값을 가져와 컨테이너에 전달
       - PORT=${PORT}
@@ -23,9 +16,6 @@ services:
       - GEMINI_BASE_URL=${GEMINI_BASE_URL}
     networks:
       - dokploy-network
-      
-volumes:
-  geminiproxy-db:
   
 networks:
   dokploy-network:
