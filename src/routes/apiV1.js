@@ -86,12 +86,43 @@ router.get('/models', async (req, res, next) => {
     }
 });
 
+// 기존 Express 핸들러 바로 아래 삽입
+function removeForbiddenJsonSchemaFields(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(removeForbiddenJsonSchemaFields);
+  } else if (obj && typeof obj === 'object') {
+    const cleaned = {};
+    for (const key of Object.keys(obj)) {
+      // "$ref"와 "$defs" 제거
+      if (key === '$ref' || key === '$defs') continue;
+      cleaned[key] = removeForbiddenJsonSchemaFields(obj[key]);
+    }
+    return cleaned;
+  }
+  return obj;
+}
+
 // --- /v1/chat/completions ---
 router.post('/chat/completions', async (req, res, next) => {
-    const openAIRequestBody = req.body;
+    let openAIRequestBody = req.body;
     const workerApiKey = req.workerApiKey; // Attached by requireWorkerAuth middleware
     const stream = openAIRequestBody?.stream ?? false;
     const requestedModelId = openAIRequestBody?.model; // Keep track for transformations
+
+    // Function Calling 파라미터에 $ref, $defs 제거
+    if (openAIRequestBody?.tools) {
+    openAIRequestBody.tools = openAIRequestBody.tools.map(tool => {
+      if (tool.function_declarations) {
+        tool.function_declarations = tool.function_declarations.map(fnDecl => {
+          if (fnDecl.parameters) {
+            fnDecl.parameters = removeForbiddenJsonSchemaFields(fnDecl.parameters);
+          }
+          return fnDecl;
+        });
+      }
+      return tool;
+    });
+    }
     
     try {
         // --- Model Validation Step ---
