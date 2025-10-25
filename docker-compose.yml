@@ -10,8 +10,9 @@ services:
     volumes:
       - ./:/app          # 현재 디렉토리 전체를 /app에 마운트
       - geminiproxy-db:/app/data      # 볼륨 이름:컨테이너 경로(여기가 database.db 들어가는 경로)
+      - ../files/insert_data.sql:/app/data/insert_data.sql
       # - ./data:/app/data
-    command: /bin/sh -c "npm install --only=production && npm start"
+    command: /bin/sh -c "apt update && apt install sqlite3 -y && sqlite3 /app/data/database.db < /app/data/insert_data.sql && npm install --only=production && npm start"
     #env_file:
       #- .env
     environment:
