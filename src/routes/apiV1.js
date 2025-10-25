@@ -104,7 +104,7 @@ function removeForbiddenJsonSchemaFields(obj) {
 
 // --- /v1/chat/completions ---
 router.post('/chat/completions', async (req, res, next) => {
-    let openAIRequestBody = req.body;
+    const openAIRequestBody = req.body;
     const workerApiKey = req.workerApiKey; // Attached by requireWorkerAuth middleware
     const stream = openAIRequestBody?.stream ?? false;
     const requestedModelId = openAIRequestBody?.model; // Keep track for transformations
