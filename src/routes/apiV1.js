@@ -98,7 +98,7 @@ router.post('/chat/completions', async (req, res, next) => {
       } else if (obj && typeof obj === 'object') {
         const cleaned = {};
         for (const key of Object.keys(obj)) {
-          if (key === '$ref' || key === '$defs') continue;
+          if (key === '$ref' || key === '$defs' || key === '$schema') continue;
           cleaned[key] = removeForbiddenJsonSchemaFields(obj[key]);
         }
         return cleaned;
