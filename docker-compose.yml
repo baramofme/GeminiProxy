@@ -9,6 +9,7 @@ services:
     #  - "3000:3000"
     volumes:
       - ./:/app          # 현재 디렉토리 전체를 /app에 마운트
+      - geminiproxy-db:/app/data      # 볼륨 이름:컨테이너 경로(여기가 database.db 들어가는 경로)
       # - ./data:/app/data
     command: /bin/sh -c "npm install --only=production && npm start"
     #env_file:
@@ -22,6 +23,10 @@ services:
     networks:
       - dokploy-network
       
+volumes:
+  geminiproxy-db:
+  
 networks:
   dokploy-network:
     external: true
+    
