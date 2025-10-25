@@ -1,10 +1,16 @@
 version: '3.8' 
 services:
   app:
-    image: dreamhartley705/jimihub:latest
+    # image: dreamhartley705/jimihub:latest
+    image: node:lts-slim
     container_name: jimihub
+    working_dir: /app  
     #ports:
     #  - "3000:3000"
+    volumes:
+      - ./:/app          # 현재 디렉토리 전체를 /app에 마운트
+      # - ./data:/app/data
+    command: /bin/sh -c "npm install --only=production && npm start"
     #env_file:
       #- .env
     environment:
@@ -13,8 +19,6 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
       - GEMINI_BASE_URL=${GEMINI_BASE_URL}
-    volumes:
-      - ./data:/app/data
     networks:
       - dokploy-network
       
