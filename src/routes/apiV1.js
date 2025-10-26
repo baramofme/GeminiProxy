@@ -87,7 +87,7 @@ router.get('/models', async (req, res, next) => {
 });
 
 // 새로운 라우트 추가 (ex: /v1/chat/completions-nostream)
-app.post('/v1/chat/completions-nostream', async (req, res) => {
+router.post('/v1/chat/completions-nostream', async (req, res) => {
   // 1. 요청 바디 복사 및 stream 무조건 OFF
   const newBody = { ...req.body, stream: false }; // 덮어쓰기
 
