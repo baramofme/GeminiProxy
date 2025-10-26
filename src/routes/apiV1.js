@@ -90,14 +90,15 @@ router.get('/models', async (req, res, next) => {
 // --- /v1/chat/completions ---
 router.post('/chat/completions', async (req, res, next) => {
 
-    console.log('[request body]', JSON.stringify(req.body, null, 2));
-    
+    // console.log('[request body]', JSON.stringify(req.body, null, 2));
+    // 재귀적으로 모든 금지 필드 삭제
     function removeForbiddenJsonSchemaFields(obj) {
       if (Array.isArray(obj)) {
         return obj.map(removeForbiddenJsonSchemaFields);
       } else if (obj && typeof obj === 'object') {
         const cleaned = {};
         for (const key of Object.keys(obj)) {
+          // 모든 금지 필드 추가
           if (key === '$ref' || key === '$defs' || key === '$schema') continue;
           cleaned[key] = removeForbiddenJsonSchemaFields(obj[key]);
         }
@@ -106,8 +107,10 @@ router.post('/chat/completions', async (req, res, next) => {
       return obj;
     }
     
+    // tools 처리 뿐만 아니라, function_declarations 내부에도 무조건 적용해야 함!
     if (req.body?.tools) {
       req.body.tools = req.body.tools.map(tool => {
+        // function_declarations 내 parameters를 재귀적으로 처리!
         if (tool.function_declarations) {
           tool.function_declarations = tool.function_declarations.map(fnDecl => {
             if (fnDecl.parameters) {
@@ -116,11 +119,15 @@ router.post('/chat/completions', async (req, res, next) => {
             return fnDecl;
           });
         }
+        // 기존 function.parameters가 있으면 여기도 처리
+        if (tool.function && tool.function.parameters) {
+          tool.function.parameters = removeForbiddenJsonSchemaFields(tool.function.parameters);
+        }
         return tool;
       });
     }
 
-    console.log('[request body after clean]', JSON.stringify(req.body, null, 2));
+    console.log('[request body after clean]', JSON.stringify({body: req.body}, null, 2));
     
     const openAIRequestBody = req.body;
     const workerApiKey = req.workerApiKey; // Attached by requireWorkerAuth middleware
