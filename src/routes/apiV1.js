@@ -86,6 +86,19 @@ router.get('/models', async (req, res, next) => {
     }
 });
 
+// 새로운 라우트 추가 (ex: /v1/chat/completions-nostream)
+app.post('/v1/chat/completions-nostream', async (req, res) => {
+  // 1. 요청 바디 복사 및 stream 무조건 OFF
+  const newBody = { ...req.body, stream: false }; // 덮어쓰기
+
+  // 2. 내부 함수 재사용 (핸들러 함수 별도로 분리 추천)
+  // 이 예시에서는 핸들러 코드가 함수로 분리돼있다고 가정:
+  // await handleChatCompletions(newBody, res);
+
+  // 또는, 기존 /v1/chat/completions 라우트를 함수로 빼서 재활용하는 식
+  req.body = newBody;
+  return app._router.handle(req, res, () => {}, '/v1/chat/completions', 'POST');
+});
 
 // --- /v1/chat/completions ---
 router.post('/chat/completions', async (req, res, next) => {
