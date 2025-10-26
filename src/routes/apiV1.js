@@ -123,6 +123,7 @@ router.post('/chat/completions', async (req, res, next) => {
             }
 
             // $ref가 없거나 처리된 후, 다른 필드들을 처리
+            const unsupportedKeys = new Set(['additionalProperties', 'patternProperties']);
             for (const key of Object.keys(schemaObj)) {
                 // $schema 필드는 메타데이터이므로 항상 제거
                 if (key === '$schema') {
@@ -136,30 +137,134 @@ router.post('/chat/completions', async (req, res, next) => {
                 if (key === '$ref') {
                     continue;
                 }
+                // Gemini function_declarations.parameters 스키마에서 지원하지 않는 키 제거
+                if (unsupportedKeys.has(key)) {
+                    // 필요시 디버깅 로그
+                    // console.warn(`[schema-clean] Dropped unsupported key '${key}' in schema path`);
+                    continue;
+                }
 
                 // 다른 모든 필드는 재귀적으로 변환
                 transformedObj[key] = transformJsonSchemaFields(schemaObj[key], currentLevelDefs);
             }
+
+            // --- Post-processing for Gemini schema constraints ---
+            // 1) Remove enum when type is not strictly 'string'
+            try {
+                const t = transformedObj.type;
+                if (Object.prototype.hasOwnProperty.call(transformedObj, 'enum')) {
+                    const isStrictString = typeof t === 'string' && t === 'string';
+                    const isUnion = Array.isArray(t);
+                    if (!isStrictString) {
+                        // Gemini only allows enum for STRING type parameters
+                        delete transformedObj.enum;
+                    } else if (isUnion) {
+                        // Union types are not strictly allowed for enum either
+                        delete transformedObj.enum;
+                    }
+                }
+            } catch (e) {
+                // Best-effort cleanup; ignore any errors here
+            }
+
             return transformedObj;
         }
         return schemaObj;
     }
 
+    // --- Utility: sanitize function names for Gemini tool schemas ---
+    function sanitizeFunctionName(name, fallbackBase) {
+        try {
+            let n = '';
+            if (typeof name === 'string') {
+                n = name.trim();
+            }
+            if (!n) {
+                n = fallbackBase || 'fn';
+            }
+            // Replace any whitespace with underscore
+            n = n.replace(/\s+/g, '_');
+            // Allow only [A-Za-z0-9_.:-]
+            n = n.replace(/[^A-Za-z0-9_.:-]/g, '_');
+            // Ensure starts with a letter or underscore
+            if (!/^[A-Za-z_]/.test(n)) {
+                n = '_' + n;
+            }
+            // Enforce max length 64
+            if (n.length > 64) {
+                n = n.slice(0, 64);
+            }
+            // Avoid empty result
+            if (!n) {
+                n = fallbackBase || 'fn';
+            }
+            return n;
+        } catch (e) {
+            return fallbackBase || 'fn';
+        }
+    }
+
     // tools 처리 뿐만 아니라, function_declarations 내부에도 무조건 적용해야 함!
     if (req.body?.tools) {
-        req.body.tools = req.body.tools.map(tool => {
-            // function_declarations 내 parameters를 재귀적으로 처리!
-            if (tool.function_declarations) {
-                tool.function_declarations = tool.function_declarations.map(fnDecl => {
+        req.body.tools = req.body.tools.map((tool, toolIdx) => {
+            // Track names to ensure uniqueness within this tool's declaration set
+            const usedNames = new Set();
+
+            // function_declarations 내 parameters를 재귀적으로 처리하고 name 정규화
+            if (Array.isArray(tool.function_declarations)) {
+                tool.function_declarations = tool.function_declarations.map((fnDecl, i) => {
+                    // Sanitize function name
+                    const originalName = fnDecl?.name;
+                    let proposed = sanitizeFunctionName(originalName, `fn_${toolIdx}_${i}`);
+
+                    // De-duplicate if collision occurs
+                    let unique = proposed;
+                    let counter = 2;
+                    while (usedNames.has(unique)) {
+                        const suffix = `_${counter}`;
+                        const base = proposed.slice(0, Math.max(1, 64 - suffix.length));
+                        unique = `${base}${suffix}`;
+                        counter++;
+                    }
+                    if (unique !== originalName) {
+                        try {
+                            console.warn(`[schema-clean] function_declarations[${i}].name sanitized: '${originalName}' -> '${unique}'`);
+                        } catch (_) {}
+                    }
+                    fnDecl.name = unique;
+                    usedNames.add(unique);
+
+                    // Parameters cleanup
                     if (fnDecl.parameters) {
                         fnDecl.parameters = transformJsonSchemaFields(fnDecl.parameters);
                     }
                     return fnDecl;
                 });
             }
-            // 기존 function.parameters가 있으면 여기도 처리
-            if (tool.function && tool.function.parameters) {
-                tool.function.parameters = transformJsonSchemaFields(tool.function.parameters);
+
+            // 기존 function.parameters가 있으면 여기도 처리 + name 정규화
+            if (tool.function) {
+                const originalSingleName = tool.function.name;
+                let proposed = sanitizeFunctionName(originalSingleName, `fn_${toolIdx}`);
+                let unique = proposed;
+                let counter = 2;
+                while (usedNames.has(unique)) {
+                    const suffix = `_${counter}`;
+                    const base = proposed.slice(0, Math.max(1, 64 - suffix.length));
+                    unique = `${base}${suffix}`;
+                    counter++;
+                }
+                if (unique !== originalSingleName) {
+                    try {
+                        console.warn(`[schema-clean] function.name sanitized: '${originalSingleName}' -> '${unique}'`);
+                    } catch (_) {}
+                }
+                tool.function.name = unique;
+                usedNames.add(unique);
+
+                if (tool.function.parameters) {
+                    tool.function.parameters = transformJsonSchemaFields(tool.function.parameters);
+                }
             }
             return tool;
         });
