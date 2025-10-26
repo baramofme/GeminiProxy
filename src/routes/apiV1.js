@@ -127,7 +127,7 @@ router.post('/chat/completions', async (req, res, next) => {
       });
     }
 
-    console.log('[request body after clean]', req.body);
+    console.log('[request body after clean]', JSON.stringify(req.body);
     
     const openAIRequestBody = req.body;
     const workerApiKey = req.workerApiKey; // Attached by requireWorkerAuth middleware
