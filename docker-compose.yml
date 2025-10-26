@@ -6,7 +6,7 @@ services:
     working_dir: /app  
     volumes:
       - ./:/app  
-      - ../files/database.db:/app/data/database.db
+      - ../files/database.db:/app/data/database.db:rw
     command: /bin/sh -c "apt update && apt install sqlite3 -y && npm install --only=production && npm start"
     environment:
       # 호스트 쉘 환경 변수의 값을 가져와 컨테이너에 전달
