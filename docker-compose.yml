@@ -1,8 +1,8 @@
 version: '3.8' 
 services:
-  app:
+  jimihub:
     image: node:lts-slim
-    container_name: jimihub
+    # container_name: jimihub
     working_dir: /app  
     volumes:
       - ./:/app  
