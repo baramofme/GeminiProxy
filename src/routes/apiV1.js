@@ -47,12 +47,12 @@ router.get('/models', async (req, res, next) => {
                     owned_by: "google",
                 }));
         }
-        
+
         // Add non-thinking versions for gemini-2.5-flash-preview models
         const nonThinkingModels = Object.keys(modelsConfig)
-            .filter(modelId => 
+            .filter(modelId =>
                 // Currently only gemini-2.5-flash-preview supports thinkingBudget
-                modelId.includes('gemini-2.5-flash-preview') && 
+                modelId.includes('gemini-2.5-flash-preview') &&
                 // Exclude models that are already non-thinking versions
                 !modelId.endsWith(':non-thinking')
             )
@@ -62,7 +62,7 @@ router.get('/models', async (req, res, next) => {
                 created: Math.floor(Date.now() / 1000),
                 owned_by: "google",
             }));
-        
+
         // Merge regular, search and non-thinking model lists
         modelsData = [...modelsData, ...searchModels, ...nonThinkingModels];
 
@@ -74,7 +74,7 @@ router.get('/models', async (req, res, next) => {
                 created: Math.floor(Date.now() / 1000),
                 owned_by: "google",
             }));
-            
+
             // Add Vertex models to the list
             modelsData = [...modelsData, ...vertexModels];
         }
@@ -86,67 +86,103 @@ router.get('/models', async (req, res, next) => {
     }
 });
 
-// 새로운 라우트 추가 (ex: /v1/chat/completions-nostream)
-router.post('/v1/chat/completions-nostream', async (req, res) => {
-  // 1. 요청 바디 복사 및 stream 무조건 OFF
-  const newBody = { ...req.body, stream: false }; // 덮어쓰기
-
-  // 2. 내부 함수 재사용 (핸들러 함수 별도로 분리 추천)
-  // 이 예시에서는 핸들러 코드가 함수로 분리돼있다고 가정:
-  // await handleChatCompletions(newBody, res);
-
-  // 또는, 기존 /v1/chat/completions 라우트를 함수로 빼서 재활용하는 식
-  req.body = newBody;
-  return app._router.handle(req, res, () => {}, '/v1/chat/completions', 'POST');
-});
-
 // --- /v1/chat/completions ---
 router.post('/chat/completions', async (req, res, next) => {
 
-    // console.log('[request body]', JSON.stringify(req.body, null, 2));
-    // 재귀적으로 모든 금지 필드 삭제
-    function removeForbiddenJsonSchemaFields(obj) {
-      if (Array.isArray(obj)) {
-        return obj.map(removeForbiddenJsonSchemaFields);
-      } else if (obj && typeof obj === 'object') {
-        const cleaned = {};
-        for (const key of Object.keys(obj)) {
-          // 모든 금지 필드 추가
-          if (key === '$ref' || key === '$defs' || key === '$schema') continue;
-          cleaned[key] = removeForbiddenJsonSchemaFields(obj[key]);
+    // console.log('[request body]', JSON.stringify(req.body));
+
+    // 재귀적으로 JSON Schema 필드를 변환 (제거 및 $ref 인라인화)
+    function transformJsonSchemaFields(schemaObj, parentDefs = {}) {
+        if (Array.isArray(schemaObj)) {
+            return schemaObj.map(item => transformJsonSchemaFields(item, parentDefs));
+        } else if (schemaObj && typeof schemaObj === 'object') {
+            // 현재 스키마 객체 내의 $defs를 부모 $defs와 병합하여 모든 정의에 접근 가능하게 함
+            const currentLevelDefs = { ...parentDefs, ...(schemaObj.$defs || {}) };
+
+            const transformedObj = {};
+
+            // $ref를 먼저 처리하여 인라인화
+            if (schemaObj.$ref) {
+                const refPath = schemaObj.$ref;
+                if (refPath.startsWith('#/$defs/')) {
+                    const defName = refPath.substring('#/$defs/'.length);
+                    if (currentLevelDefs[defName]) {
+                        // $ref가 가리키는 정의를 찾아서 인라인화하고 재귀적으로 처리
+                        // 여기서 $ref가 가리키는 정의가 현재 객체를 대체하므로, 해당 정의를 반환
+                        return transformJsonSchemaFields(currentLevelDefs[defName], currentLevelDefs);
+                    } else {
+                        console.warn(`[WARNING] Local $ref '${refPath}' in schema could not be resolved. This reference will be removed.`);
+                        // 해결할 수 없는 $ref는 무시하고 빈 객체 반환 (혹은 오류 처리)
+                        return {};
+                    }
+                } else {
+                    console.warn(`[WARNING] Non-local or unsupported $ref '${refPath}' in schema. This reference will be removed.`);
+                    // 지원하지 않는 $ref는 무시
+                    return {};
+                }
+            }
+
+            // $ref가 없거나 처리된 후, 다른 필드들을 처리
+            for (const key of Object.keys(schemaObj)) {
+                // $schema 필드는 메타데이터이므로 항상 제거
+                if (key === '$schema') {
+                    continue;
+                }
+                // $defs 필드는 참조 해상도에 사용되었으므로 최종 출력에서는 제거
+                if (key === '$defs') {
+                    continue;
+                }
+                // $ref는 위에서 이미 처리했으므로 여기서는 건너뛰기 (이미 대체되었거나 무시됨)
+                if (key === '$ref') {
+                    continue;
+                }
+
+                // 다른 모든 필드는 재귀적으로 변환
+                transformedObj[key] = transformJsonSchemaFields(schemaObj[key], currentLevelDefs);
+            }
+            return transformedObj;
         }
-        return cleaned;
-      }
-      return obj;
+        return schemaObj;
     }
-    
+
     // tools 처리 뿐만 아니라, function_declarations 내부에도 무조건 적용해야 함!
     if (req.body?.tools) {
-      req.body.tools = req.body.tools.map(tool => {
-        // function_declarations 내 parameters를 재귀적으로 처리!
-        if (tool.function_declarations) {
-          tool.function_declarations = tool.function_declarations.map(fnDecl => {
-            if (fnDecl.parameters) {
-              fnDecl.parameters = removeForbiddenJsonSchemaFields(fnDecl.parameters);
+        req.body.tools = req.body.tools.map(tool => {
+            // function_declarations 내 parameters를 재귀적으로 처리!
+            if (tool.function_declarations) {
+                tool.function_declarations = tool.function_declarations.map(fnDecl => {
+                    if (fnDecl.parameters) {
+                        fnDecl.parameters = transformJsonSchemaFields(fnDecl.parameters);
+                    }
+                    return fnDecl;
+                });
             }
-            return fnDecl;
-          });
-        }
-        // 기존 function.parameters가 있으면 여기도 처리
-        if (tool.function && tool.function.parameters) {
-          tool.function.parameters = removeForbiddenJsonSchemaFields(tool.function.parameters);
-        }
-        return tool;
-      });
+            // 기존 function.parameters가 있으면 여기도 처리
+            if (tool.function && tool.function.parameters) {
+                tool.function.parameters = transformJsonSchemaFields(tool.function.parameters);
+            }
+            return tool;
+        });
+    }
+
+    // 사용자 지침에 따라 req.body에서 잠재적인 safety_settings 또는 response_schema 필드를 제거
+    // 비록 현재 req.body에 명시적으로 보이지 않지만, 예방적인 차원에서 추가합니다.
+    if (req.body?.safety_settings) {
+        delete req.body.safety_settings;
+        console.log('[request body after clean] safety_settings field removed based on user guidance');
+    }
+    if (req.body?.response_schema) {
+        delete req.body.response_schema;
+        console.log('[request body after clean] response_schema field removed based on user guidance');
     }
 
     console.log('[request body after clean]', JSON.stringify(req.body));
-    
+
     const openAIRequestBody = req.body;
     const workerApiKey = req.workerApiKey; // Attached by requireWorkerAuth middleware
     const stream = openAIRequestBody?.stream ?? false;
     const requestedModelId = openAIRequestBody?.model; // Keep track for transformations
-    
+
     try {
         // --- Model Validation Step ---
         // Get all available models to validate against the request
@@ -161,7 +197,7 @@ router.post('/chat/completions', async (req, res, next) => {
                 .map(modelId => `${modelId}-search`);
             enabledModels = [...enabledModels, ...searchModels];
         }
-        
+
         // Add non-thinking versions
         const nonThinkingModels = Object.keys(modelsConfig)
             .filter(modelId => modelId.includes('gemini-2.5-flash-preview') && !modelId.endsWith(':non-thinking'))
@@ -185,15 +221,15 @@ router.post('/chat/completions', async (req, res, next) => {
             });
         }
         // --- End Model Validation ---
-        
+
         // Check if this is a non-thinking model request
         const isNonThinking = requestedModelId?.endsWith(':non-thinking');
         // Remove the suffix for actual model lookup, but keep original for response
         const actualModelId = isNonThinking ? requestedModelId.replace(':non-thinking', '') : requestedModelId;
-        
+
         // Set thinkingBudget to 0 for non-thinking models
         const thinkingBudget = isNonThinking ? 0 : undefined;
-        
+
         // If model was modified, update the request body with the actual model ID
         if (isNonThinking) {
             openAIRequestBody.model = actualModelId;
@@ -439,6 +475,8 @@ router.post('/chat/completions', async (req, res, next) => {
         // Destructure the successful result
         const { response: geminiResponse, selectedKeyId, modelCategory } = result;
 
+        console.log('[response]', JSON.stringify(geminiResponse.body));
+
         // --- Handle Response ---
 
         // Check if this is a KEEPALIVE special response first
@@ -500,11 +538,11 @@ router.post('/chat/completions', async (req, res, next) => {
                             let inString = false;
                             let escapeNext = false;
                             let flushed = false;
-                            
+
                             // Scan the entire buffer to find complete JSON objects
                             for (let i = 0; i < buffer.length; i++) {
                                 const char = buffer[i];
-                                
+
                                 // Handle characters inside strings
                                 if (inString) {
                                     if (escapeNext) {
@@ -516,7 +554,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                     }
                                     continue;
                                 }
-                                
+
                                 // Handle characters outside strings
                                 if (char === '{') {
                                     if (bracketDepth === 0) {
@@ -527,7 +565,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                     bracketDepth--;
                                     if (bracketDepth === 0 && startPos !== -1) {
                                         endPos = i;
-                                        
+
                                         // Extract and process the complete JSON object
                                         const jsonStr = buffer.substring(startPos, endPos + 1);
                                         try {
@@ -561,10 +599,10 @@ router.post('/chat/completions', async (req, res, next) => {
                                             // This outer catch handles errors from buffer.substring or other unexpected issues
                                             console.error("Error processing Vertex JSON chunk:", e, "Original string:", jsonStr);
                                         }
-                                        
+
                                         // Continue searching for the next object
                                         startPos = -1;
-                                        
+
                                         // Truncate the processed part
                                         if (i + 1 < buffer.length) {
                                             buffer = buffer.substring(endPos + 1);
@@ -585,11 +623,11 @@ router.post('/chat/completions', async (req, res, next) => {
                         let bracketDepth = 0;
                         let inString = false;
                         let escapeNext = false;
-                        
+
                         // Scan the entire buffer to find complete JSON objects
                         for (let i = 0; i < buffer.length; i++) {
                             const char = buffer[i];
-                            
+
                             // Handle characters within strings
                             if (inString) {
                                 if (escapeNext) {
@@ -601,7 +639,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                 }
                                 continue;
                             }
-                            
+
                             // Handle characters outside strings
                             if (char === '{') {
                                 if (bracketDepth === 0) {
@@ -612,7 +650,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                 bracketDepth--;
                                 if (bracketDepth === 0 && startPos !== -1) {
                                     endPos = i;
-                                    
+
                                     // Extract and process the complete JSON object
                                     const jsonStr = buffer.substring(startPos, endPos + 1);
                                     try {
@@ -622,7 +660,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                     } catch (e) {
                                         console.error("Error parsing JSON object:", e);
                                     }
-                                    
+
                                                 // Continue searching for the next object
                                                 startPos = -1;
                                             }
@@ -639,7 +677,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                             continue;
                                         }
                                     }
-                                    
+
                                     // Keep the unprocessed part for Gemini stream
                                     if (startPos !== -1 && endPos !== -1 && endPos > startPos) {
                                         buffer = buffer.substring(endPos + 1);
@@ -649,14 +687,14 @@ router.post('/chat/completions', async (req, res, next) => {
                                         buffer = '';
                                     }
                             } // End of else (Gemini stream processing)
-                        
+
                         callback();
                     } catch (e) {
                         console.error("Error in stream transform:", e);
                         callback(e);
                     }
                 },
-                
+
                 flush(callback) {
                     try {
                 // Handling the remaining buffer
@@ -668,10 +706,10 @@ router.post('/chat/completions', async (req, res, next) => {
                             let bracketDepth = 0;
                             let inString = false;
                             let escapeNext = false;
-                            
+
                             for (let i = 0; i < buffer.length; i++) {
                                 const char = buffer[i];
-                                
+
                                 if (inString) {
                                     if (escapeNext) {
                                         escapeNext = false;
@@ -682,7 +720,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                     }
                                     continue;
                                 }
-                                
+
                                 if (char === '{') {
                                     if (bracketDepth === 0) {
                                         startPos = i;
@@ -692,7 +730,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                     bracketDepth--;
                                     if (bracketDepth === 0 && startPos !== -1) {
                                         endPos = i;
-                                        
+
                                         try {
                                             const jsonStr = buffer.substring(startPos, endPos + 1);
                                             const jsonObj = JSON.parse(jsonStr);
@@ -702,7 +740,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                         } catch (e) {
                                             console.debug("Could not parse Vertex buffer JSON:", e);
                                         }
-                                        
+
                                         // Update the buffer and reset the index
                                         if (endPos + 1 < buffer.length) {
                                             buffer = buffer.substring(endPos + 1);
@@ -727,7 +765,7 @@ router.post('/chat/completions', async (req, res, next) => {
                                 }
                              }
                         }
-                        
+
                         // Always send the final [DONE] event
                                                 // console.log("Stream transformer flushing, sending [DONE]."); // Removed log
                                                 this.push('data: [DONE]\n\n');
@@ -738,11 +776,11 @@ router.post('/chat/completions', async (req, res, next) => {
                     }
                 }
             });
-            
+
             // Process a single Gemini API response object and convert it to OpenAI format
             function processGeminiObject(geminiObj, stream) {
                 if (!geminiObj) return;
-                
+
                 // If it's a valid Gemini response object (contains candidates)
                 if (geminiObj.candidates && geminiObj.candidates.length > 0) {
                     // Convert and send directly
@@ -765,7 +803,7 @@ router.post('/chat/completions', async (req, res, next) => {
                             }
                         }]
                     };
-                    
+
                     const openaiChunkStr = transformUtils.transformGeminiStreamChunk(mockGeminiChunk, requestedModelId);
                     if (openaiChunkStr) {
                         stream.push(openaiChunkStr);

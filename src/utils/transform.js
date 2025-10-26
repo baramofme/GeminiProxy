@@ -13,6 +13,156 @@ function parseDataUri(dataUri) {
 }
 
 /**
+ * Sanitize OpenAI-style JSON Schema for Gemini/Vertex functionDeclarations.parameters.
+ * - Removes unsupported keywords (e.g., $schema, definitions, $defs, $ref, patternProperties)
+ * - Normalizes combinators: any_of/one_of/all_of -> anyOf/oneOf/allOf
+ * - Converts const -> enum with single value
+ * - Recursively sanitizes nested schemas (properties/items/additionalProperties)
+ * - Coerces numeric constraints to numbers, prunes invalid types
+ *
+ * @param {any} schema
+ * @param {{dropTitle?:boolean, keepDescription?:boolean, dropFormatIfError?:boolean, debugEnvVar?:string}} [opts]
+ * @returns {any}
+ */
+function sanitizeToolParameters(schema, opts = {}) {
+    const options = {
+        dropTitle: true,
+        keepDescription: true,
+        dropFormatIfError: false,
+        debugEnvVar: 'TOOL_SCHEMA_DEBUG',
+        ...opts,
+    };
+
+    const DEBUG = process && process.env && process.env[options.debugEnvVar] === '1';
+
+    const SUPPORTED_TYPES = new Set(['string','number','integer','boolean','object','array']);
+
+    function logChange(pointer, message) {
+        if (DEBUG) console.warn(`[schema-sanitize] ${pointer}: ${message}`);
+    }
+
+    function clone(val) {
+        try { return JSON.parse(JSON.stringify(val)); } catch { return val; }
+    }
+
+    function toNumber(n) {
+        if (typeof n === 'number') return n;
+        const parsed = Number(n);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    function sanitize(node, pointer = '#') {
+        if (node == null || typeof node !== 'object') return node;
+        const s = Array.isArray(node) ? node.map((v, i) => sanitize(v, `${pointer}/${i}`)) : clone(node);
+        if (Array.isArray(s)) return s; // only for arrays that arrive here intentionally
+
+        // Remove known unsupported top-level keys
+        for (const k of ['$schema','definitions','$defs','$ref','patternProperties','examples','deprecated','readOnly','writeOnly']) {
+            if (k in s) { delete s[k]; logChange(pointer, `dropped '${k}'`); }
+        }
+
+        // Titles/descriptions
+        if (options.dropTitle && 'title' in s) { delete s.title; logChange(pointer, `dropped 'title'`); }
+        if (!options.keepDescription && 'description' in s) { delete s.description; logChange(pointer, `dropped 'description'`); }
+
+        // const -> enum
+        if ('const' in s) {
+            const val = s.const; delete s.const; s.enum = [val];
+            logChange(pointer, `converted 'const' to 'enum' with single value`);
+        }
+
+        // Normalize combinators
+        if ('any_of' in s) { s.anyOf = s.any_of; delete s.any_of; logChange(pointer, `renamed 'any_of' -> 'anyOf'`); }
+        if ('one_of' in s) { s.oneOf = s.one_of; delete s.one_of; logChange(pointer, `renamed 'one_of' -> 'oneOf'`); }
+        if ('all_of' in s) { s.allOf = s.all_of; delete s.all_of; logChange(pointer, `renamed 'all_of' -> 'allOf'`); }
+
+        // Sanitize combinators
+        for (const key of ['anyOf','oneOf','allOf']) {
+            if (s[key]) {
+                if (!Array.isArray(s[key])) {
+                    s[key] = [s[key]]; logChange(pointer, `wrapped '${key}' into array`);
+                }
+                s[key] = s[key].map((sub, idx) => sanitize(sub, `${pointer}/${key}/${idx}`));
+            }
+        }
+
+        // Type handling
+        if ('type' in s) {
+            if (Array.isArray(s.type)) {
+                const filtered = s.type.filter(t => SUPPORTED_TYPES.has(t));
+                if (filtered.length === 0) {
+                    delete s.type; logChange(pointer, `removed unsupported 'type' array`);
+                } else if (filtered.length === 1) {
+                    s.type = filtered[0]; logChange(pointer, `reduced 'type' array to '${s.type}'`);
+                } else {
+                    // Multiple supported types → represent via anyOf
+                    delete s.type;
+                    s.anyOf = filtered.map((t, i) => ({ type: t }));
+                    logChange(pointer, `converted multi-type to anyOf of supported types`);
+                }
+            } else if (typeof s.type === 'string') {
+                if (!SUPPORTED_TYPES.has(s.type)) {
+                    logChange(pointer, `unsupported type '${s.type}' dropped`);
+                    delete s.type;
+                }
+            }
+        }
+
+        // Object specifics
+        if (s.type === 'object' || s.properties || s.required || s.additionalProperties !== undefined) {
+            if (s.properties && typeof s.properties === 'object') {
+                for (const [prop, sub] of Object.entries(s.properties)) {
+                    s.properties[prop] = sanitize(sub, `${pointer}/properties/${prop}`);
+                }
+            }
+            if (Array.isArray(s.required)) {
+                s.required = s.required.filter((r) => typeof r === 'string');
+            }
+            if ('additionalProperties' in s) {
+                const ap = s.additionalProperties;
+                if (ap === true || ap === false) {
+                    // ok
+                } else if (ap && typeof ap === 'object') {
+                    s.additionalProperties = sanitize(ap, `${pointer}/additionalProperties`);
+                } else {
+                    // Fallback to boolean false to avoid complex schemas
+                    s.additionalProperties = false;
+                    logChange(pointer, `coerced additionalProperties to false`);
+                }
+            }
+        }
+
+        // Array specifics
+        if (s.type === 'array' || s.items) {
+            if (s.items) {
+                s.items = sanitize(s.items, `${pointer}/items`);
+            }
+            if ('minItems' in s) { const v = toNumber(s.minItems); if (v === undefined) { delete s.minItems; logChange(pointer, `dropped invalid minItems`); } else { s.minItems = v; } }
+            if ('maxItems' in s) { const v = toNumber(s.maxItems); if (v === undefined) { delete s.maxItems; logChange(pointer, `dropped invalid maxItems`); } else { s.maxItems = v; } }
+            if ('uniqueItems' in s && typeof s.uniqueItems !== 'boolean') { delete s.uniqueItems; logChange(pointer, `dropped invalid uniqueItems`); }
+        }
+
+        // Numeric & string constraints coercion
+        for (const k of ['minimum','maximum','exclusiveMinimum','exclusiveMaximum','multipleOf']) {
+            if (k in s) {
+                const v = toNumber(s[k]);
+                if (v === undefined) { delete s[k]; logChange(pointer, `dropped invalid ${k}`); }
+                else if (k === 'exclusiveMinimum' || k === 'exclusiveMaximum') { delete s[k]; logChange(pointer, `dropped ${k} (not supported)`); }
+                else { s[k] = v; }
+            }
+        }
+        for (const k of ['minLength','maxLength']) {
+            if (k in s) { const v = toNumber(s[k]); if (v === undefined) { delete s[k]; logChange(pointer, `dropped invalid ${k}`); } else { s[k] = v; } }
+        }
+        if ('format' in s && options.dropFormatIfError) { delete s.format; logChange(pointer, `dropped 'format' due to config`); }
+
+        return s;
+    }
+
+    return sanitize(clone(schema), '#');
+}
+
+/**
  * Transforms an OpenAI-compatible request body to the Gemini API format.
  * @param {object} requestBody - The OpenAI request body.
  * @param {string} [requestedModelId] - The specific model ID requested.
@@ -29,6 +179,9 @@ function transformOpenAiToGemini(requestBody, requestedModelId, isSafetyEnabled 
 	let systemInstruction = undefined;
 	let systemMessageLogPrinted = false; // Add flag to track if log has been printed
 
+ // Build mapping from assistant tool_calls id -> function name for later tool messages
+	const toolCallIdToName = new Map();
+
 	messages.forEach((msg) => {
 		let role = undefined;
 		let parts = [];
@@ -40,6 +193,10 @@ function transformOpenAiToGemini(requestBody, requestedModelId, isSafetyEnabled 
 				break;
 			case 'assistant':
 				role = 'model';
+				break;
+			case 'tool':
+				// OpenAI 'tool' role carries tool execution result; Gemini expects this as a user message with functionResponse
+				role = 'user';
 				break;
 			case 'system':
                 // If safety is disabled OR it's a gemma model, treat system as user
@@ -71,7 +228,48 @@ function transformOpenAiToGemini(requestBody, requestedModelId, isSafetyEnabled 
 		}
 
 		// 2. Map Content to Parts
-		if (typeof msg.content === 'string') {
+		// Special handling for assistant with tool_calls (may have null/empty content)
+		if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+			msg.tool_calls.forEach((tc, index) => {
+				if (tc?.type === 'function' && tc.function?.name) {
+					// Track mapping from tool_call id to function name for subsequent tool message
+					if (tc.id) toolCallIdToName.set(tc.id, tc.function.name);
+					let argsObj = {};
+					try { argsObj = JSON.parse(tc.function.arguments || '{}'); } catch (e) { argsObj = { _error: 'Invalid JSON arguments', raw: tc.function.arguments }; }
+					parts.push({ functionCall: { name: tc.function.name, args: argsObj } });
+				}
+			});
+			// If there is also text content, include it
+			if (typeof msg.content === 'string' && msg.content.length > 0) {
+				parts.push({ text: msg.content });
+			} else if (Array.isArray(msg.content)) {
+				msg.content.forEach((part) => { if (part.type === 'text') parts.push({ text: part.text }); });
+			}
+		}
+		else if (msg.role === 'tool') {
+			// Convert tool result into functionResponse under a user message
+			const name = msg.name || (msg.tool_call_id ? toolCallIdToName.get(msg.tool_call_id) : undefined);
+			let responseObj;
+			if (typeof msg.content === 'string') {
+				try { responseObj = JSON.parse(msg.content); }
+				catch (e) { responseObj = { content: msg.content }; }
+			} else if (typeof msg.content === 'object' && msg.content !== null) {
+				responseObj = msg.content;
+			} else {
+				responseObj = { content: String(msg.content ?? '') };
+			}
+			// Gemini/Vertex require functionResponse.response to be a JSON object (Struct)
+			if (responseObj === null || Array.isArray(responseObj) || typeof responseObj !== 'object') {
+				responseObj = { content: responseObj };
+			}
+			if (name) {
+				parts.push({ functionResponse: { name, response: responseObj } });
+			} else {
+				console.warn(`Tool message without resolvable function name (tool_call_id: ${msg.tool_call_id}). Sending as text.`);
+				parts.push({ text: typeof msg.content === 'string' ? msg.content : JSON.stringify(responseObj) });
+			}
+		}
+		else if (typeof msg.content === 'string') {
 			parts.push({ text: msg.content });
 		} else if (Array.isArray(msg.content)) {
 			// Handle multi-part messages (text and images)
@@ -104,8 +302,11 @@ function transformOpenAiToGemini(requestBody, requestedModelId, isSafetyEnabled 
 				}
 			});
 		} else {
-			console.warn(`Unsupported content type for role ${msg.role}: ${typeof msg.content}. Skipping message.`);
-			return;
+			// Allow assistant messages that only contain tool_calls (handled above) to pass without content
+			if (!(msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0)) {
+				console.warn(`Unsupported content type for role ${msg.role}: ${typeof msg.content}. Skipping message.`);
+				return;
+			}
 		}
 
 		// Add the transformed message to contents if it has a role and parts
@@ -121,11 +322,19 @@ function transformOpenAiToGemini(requestBody, requestedModelId, isSafetyEnabled 
 			.filter(tool => tool.type === 'function' && tool.function)
 			.map(tool => {
                 // Deep clone parameters to avoid modifying the original request object
-                const parameters = tool.function.parameters ? JSON.parse(JSON.stringify(tool.function.parameters)) : undefined;
-                // Remove the $schema field if it exists in the clone
+                let parameters = tool.function.parameters ? JSON.parse(JSON.stringify(tool.function.parameters)) : undefined;
+                // Remove the $schema field if it exists in the clone (legacy cleanup)
                 if (parameters && parameters.$schema !== undefined) {
                     delete parameters.$schema;
                     console.log(`Removed '$schema' from parameters for tool: ${tool.function.name}`);
+                }
+                // Sanitize schema for Gemini compatibility
+                if (parameters) {
+                    try {
+                        parameters = sanitizeToolParameters(parameters);
+                    } catch (e) {
+                        console.warn(`Failed to sanitize tool parameters for ${tool.function.name}: ${e?.message || e}`);
+                    }
                 }
 				return {
 					name: tool.function.name,
@@ -461,6 +670,7 @@ function transformGeminiResponseToOpenAI(geminiResponse, modelId) {
 
 module.exports = {
     parseDataUri,
+    sanitizeToolParameters,
     transformOpenAiToGemini,
     transformGeminiStreamChunk,
     transformGeminiResponseToOpenAI,

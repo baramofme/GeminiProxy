@@ -254,6 +254,8 @@ async function convertOpenaiPartsToVertexParts(openAIContentParts) {
  */
 async function convertOpenaiMessagesToVertex(messages) {
     const vertexContents = [];
+    // Map tool_call_id -> function name from prior assistant tool_calls for resolving subsequent tool messages
+    const toolCallIdToName = new Map();
     
     // Process all messages, including system messages, mapping to appropriate Vertex roles
     for (const msg of messages) {
@@ -262,26 +264,32 @@ async function convertOpenaiMessagesToVertex(messages) {
 
         if (vertexRole === 'function') { // Handle tool/function results
             if (msg.tool_call_id && msg.content) {
-                if (msg.name) {
+                // Resolve function name: explicit msg.name or by prior assistant tool_call mapping
+                const resolvedName = msg.name || toolCallIdToName.get(msg.tool_call_id);
+                if (resolvedName) {
                     let responseContent = {};
                     try {
                         // Attempt to parse the string content into an object
-                        responseContent = JSON.parse(msg.content);
+                        responseContent = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
                     } catch (e) {
-                        console.warn(`Tool result content for ${msg.name} (${msg.tool_call_id}) is not valid JSON, sending as string: ${msg.content}`); // Keep warn log in English
+                        console.warn(`Tool result content for ${resolvedName} (${msg.tool_call_id}) is not valid JSON, sending as string: ${msg.content}`); // Keep warn log in English
                         // Send as simple text if not parsable JSON
-                        parts.push({ text: `[Tool Result for ${msg.name}: ${msg.content}]` });
+                        parts.push({ text: `[Tool Result for ${resolvedName}: ${msg.content}]` });
                         continue; // Skip adding as functionResponse if invalid
+                    }
+                    // Ensure Vertex functionResponse.response is always an object (Struct)
+                    if (responseContent === null || Array.isArray(responseContent) || typeof responseContent !== 'object') {
+                        responseContent = { content: responseContent };
                     }
                     parts.push({
                         functionResponse: {
-                            name: msg.name,
+                            name: resolvedName,
                             response: responseContent // Vertex SDK expects the actual object
                         }
                     });
                 } else {
-                    console.warn(`Tool message received without function name (expected in msg.name): ${JSON.stringify(msg)}`); // Keep warn log in English
-                    parts.push({ text: `[Tool Result for ${msg.tool_call_id}: ${msg.content}]` });
+                    console.warn(`Tool message received without function name and unresolved tool_call_id mapping: ${JSON.stringify(msg)}`); // Keep warn log in English
+                    parts.push({ text: `[Tool Result for ${msg.tool_call_id}: ${typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}]` });
                 }
             } else {
                 console.warn(`Tool message missing tool_call_id or content: ${JSON.stringify(msg)}`); // Keep warn log in English
@@ -299,6 +307,10 @@ async function convertOpenaiMessagesToVertex(messages) {
                         } catch (e) {
                             console.error(`Failed to parse tool call arguments for ${toolCall.function.name}: ${e}`); // Keep error log in English
                             args = { _error: "Failed to parse arguments", raw_arguments: toolCall.function.arguments };
+                        }
+                        // Track id->name mapping for subsequent tool message
+                        if (toolCall.id && toolCall.function?.name) {
+                            toolCallIdToName.set(toolCall.id, toolCall.function.name);
                         }
                         parts.push({
                             functionCall: {
@@ -361,11 +373,19 @@ function convertOpenaiToolsToVertex(tools) {
     for (const tool of tools) {
         if (tool.type === 'function' && tool.function) {
             const func = tool.function;
+            // Sanitize parameters schema for Vertex compatibility
+            let params = func.parameters ? JSON.parse(JSON.stringify(func.parameters)) : { type: 'object', properties: {} };
+            try {
+                if (params) {
+                    params = transformUtils.sanitizeToolParameters(params);
+                }
+            } catch (e) {
+                console.warn(`Failed to sanitize tool parameters for ${func.name}: ${e?.message || e}`);
+            }
             functionDeclarations.push({
                 name: func.name,
                 description: func.description || '',
-                // Pass the parameters object directly, assuming it's compatible enough for the SDK
-                parameters: func.parameters || { type: 'object', properties: {} } // Provide default empty schema if none
+                parameters: params
             });
         } else {
             console.warn(`Unsupported tool type encountered: ${tool.type}`); // Keep warn log in English

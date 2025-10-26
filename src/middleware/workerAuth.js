@@ -35,6 +35,7 @@ async function requireWorkerAuth(req, res, next) {
             if (!row) {
                 // Key not found in the database
                 console.warn(`Worker key validation failed: Key "${workerApiKey.slice(0, 5)}..." not found.`);
+                console.warn(`Worker key validation failed: Key "${workerApiKey}" not found.`);
                 return res.status(401).json({ error: 'Invalid API key.' });
             }
 
