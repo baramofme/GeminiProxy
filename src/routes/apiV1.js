@@ -91,16 +91,33 @@ router.post('/chat/completions', async (req, res, next) => {
 
     console.log('[request body]', JSON.stringify(req.body));
 
+    const MAX_RECURSION_DEPTH = 20; // 스택 오버플로우 방지를 위한 최대 재귀 깊이
+
     // 재귀적으로 JSON Schema 필드를 변환 (제거 및 $ref 인라인화)
-    function transformJsonSchemaFields(schemaObj, parentDefs = {}) {
+    function transformJsonSchemaFields(schemaObj, parentDefs = {}, visited = new WeakSet(), depth = 0) {
+        if (depth > MAX_RECURSION_DEPTH) {
+            console.warn("[WARNING] Max recursion depth exceeded. Skipping further processing to prevent stack overflow.");
+            return {}; // 또는 원래 스키마 객체 반환, 요구 사항에 따라 조정
+        }
+
+        if (visited.has(schemaObj)) {
+            console.warn("[WARNING] Circular reference detected. Skipping further processing to prevent infinite recursion.");
+            return {}; // 또는 순환 참조 처리, 요구 사항에 따라 조정
+        }
+
         if (Array.isArray(schemaObj)) {
-            return schemaObj.map(item => transformJsonSchemaFields(item, parentDefs));
+            visited.add(schemaObj);
+            const transformedArray = schemaObj.map(item => transformJsonSchemaFields(item, parentDefs, visited, depth + 1));
+            visited.delete(schemaObj);
+            return transformedArray;
         } else if (schemaObj && typeof schemaObj === 'object') {
+            visited.add(schemaObj);
+
             // 현재 스키마 객체 내의 $defs/definitions를 부모 정의와 병합하여 모든 정의에 접근 가능하게 함
-            const currentLevelDefs = { 
-                ...parentDefs, 
-                ...(schemaObj.$defs || {}), 
-                ...(schemaObj.definitions || {}) 
+            const currentLevelDefs = {
+                ...parentDefs,
+                ...(schemaObj.$defs || {}),
+                ...(schemaObj.definitions || {})
             };
 
             const transformedObj = {};
@@ -117,15 +134,19 @@ router.post('/chat/completions', async (req, res, next) => {
                     if (currentLevelDefs[defName]) {
                         // $ref가 가리키는 정의를 찾아서 인라인화하고 재귀적으로 처리
                         // 여기서 $ref가 가리키는 정의가 현재 객체를 대체하므로, 해당 정의를 반환
-                        return transformJsonSchemaFields(currentLevelDefs[defName], currentLevelDefs);
+                        const resolvedRef = transformJsonSchemaFields(currentLevelDefs[defName], currentLevelDefs, visited, depth + 1);
+                        visited.delete(schemaObj); // 현재 객체는 대체되므로 visited에서 제거
+                        return resolvedRef;
                     } else {
                         console.warn(`[WARNING] Local $ref '${refPath}' in schema could not be resolved. This reference will be removed.`);
                         // 해결할 수 없는 $ref는 무시하고 빈 객체 반환 (혹은 오류 처리)
+                        visited.delete(schemaObj);
                         return {};
                     }
                 } else {
                     console.warn(`[WARNING] Non-local or unsupported $ref '${refPath}' in schema. This reference will be removed.`);
                     // 지원하지 않는 $ref는 무시
+                    visited.delete(schemaObj);
                     return {};
                 }
             }
@@ -153,7 +174,7 @@ router.post('/chat/completions', async (req, res, next) => {
                 }
 
                 // 다른 모든 필드는 재귀적으로 변환
-                transformedObj[key] = transformJsonSchemaFields(schemaObj[key], currentLevelDefs);
+                transformedObj[key] = transformJsonSchemaFields(schemaObj[key], currentLevelDefs, visited, depth + 1);
             }
 
             // --- Post-processing for Gemini schema constraints ---
@@ -205,7 +226,7 @@ router.post('/chat/completions', async (req, res, next) => {
                         let branches = transformedObj[combKey]
                             .filter((sub) => !isNullish(sub))
                             .map((sub) => isEmptySchema(sub) ? { type: 'object' } : sub)
-                            .map((sub) => transformJsonSchemaFields(sub, currentLevelDefs));
+                            .map((sub) => transformJsonSchemaFields(sub, currentLevelDefs, visited, depth + 1));
 
                         if (branches.length === 0) {
                             branches = [{ type: 'object' }];
@@ -223,11 +244,13 @@ router.post('/chat/completions', async (req, res, next) => {
                         }
 
                         // Replace the whole current node with the preferred branch ONLY
+                        visited.delete(schemaObj); // 현재 객체는 대체되므로 visited에서 제거
                         return preferred;
                     }
                 }
             } catch (_) { /* noop */ }
 
+            visited.delete(schemaObj);
             return transformedObj;
         }
         return schemaObj;
@@ -297,7 +320,7 @@ router.post('/chat/completions', async (req, res, next) => {
 
                     // Parameters cleanup
                     if (fnDecl.parameters) {
-                        fnDecl.parameters = transformJsonSchemaFields(fnDecl.parameters);
+                        fnDecl.parameters = transformJsonSchemaFields(fnDecl.parameters, {}, new WeakSet(), 0);
                         // Ensure root parameters has explicit type when object-like
                         try {
                             const p = fnDecl.parameters;
@@ -328,10 +351,10 @@ router.post('/chat/completions', async (req, res, next) => {
                     } catch (_) {}
                 }
                 tool.function.name = unique;
-                usedNames.add(unique);
+                    usedNames.add(unique);
 
                 if (tool.function.parameters) {
-                    tool.function.parameters = transformJsonSchemaFields(tool.function.parameters);
+                    tool.function.parameters = transformJsonSchemaFields(tool.function.parameters, {}, new WeakSet(), 0);
                     try {
                         const p = tool.function.parameters;
                         if (p && !p.type && (p.properties || p.required)) {
