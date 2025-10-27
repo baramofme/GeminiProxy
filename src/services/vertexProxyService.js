@@ -382,6 +382,10 @@ function convertOpenaiToolsToVertex(tools) {
             } catch (e) {
                 console.warn(`Failed to sanitize tool parameters for ${func.name}: ${e?.message || e}`);
             }
+            // Defensive: ensure root parameters has explicit type when object-like
+            if (params && !params.type && (params.properties || params.required || ('additionalProperties' in params))) {
+                params.type = 'object';
+            }
             functionDeclarations.push({
                 name: func.name,
                 description: func.description || '',

@@ -89,23 +89,31 @@ router.get('/models', async (req, res, next) => {
 // --- /v1/chat/completions ---
 router.post('/chat/completions', async (req, res, next) => {
 
-    // console.log('[request body]', JSON.stringify(req.body));
+    console.log('[request body]', JSON.stringify(req.body));
 
     // 재귀적으로 JSON Schema 필드를 변환 (제거 및 $ref 인라인화)
     function transformJsonSchemaFields(schemaObj, parentDefs = {}) {
         if (Array.isArray(schemaObj)) {
             return schemaObj.map(item => transformJsonSchemaFields(item, parentDefs));
         } else if (schemaObj && typeof schemaObj === 'object') {
-            // 현재 스키마 객체 내의 $defs를 부모 $defs와 병합하여 모든 정의에 접근 가능하게 함
-            const currentLevelDefs = { ...parentDefs, ...(schemaObj.$defs || {}) };
+            // 현재 스키마 객체 내의 $defs/definitions를 부모 정의와 병합하여 모든 정의에 접근 가능하게 함
+            const currentLevelDefs = { 
+                ...parentDefs, 
+                ...(schemaObj.$defs || {}), 
+                ...(schemaObj.definitions || {}) 
+            };
 
             const transformedObj = {};
 
             // $ref를 먼저 처리하여 인라인화
             if (schemaObj.$ref) {
                 const refPath = schemaObj.$ref;
-                if (refPath.startsWith('#/$defs/')) {
-                    const defName = refPath.substring('#/$defs/'.length);
+                let defPrefix = null;
+                if (refPath.startsWith('#/$defs/')) defPrefix = '#/$defs/';
+                else if (refPath.startsWith('#/definitions/')) defPrefix = '#/definitions/';
+
+                if (defPrefix) {
+                    const defName = refPath.substring(defPrefix.length);
                     if (currentLevelDefs[defName]) {
                         // $ref가 가리키는 정의를 찾아서 인라인화하고 재귀적으로 처리
                         // 여기서 $ref가 가리키는 정의가 현재 객체를 대체하므로, 해당 정의를 반환
@@ -123,7 +131,7 @@ router.post('/chat/completions', async (req, res, next) => {
             }
 
             // $ref가 없거나 처리된 후, 다른 필드들을 처리
-            const unsupportedKeys = new Set(['additionalProperties', 'patternProperties']);
+            const unsupportedKeys = new Set(['additionalProperties', 'patternProperties', 'definitions']);
             for (const key of Object.keys(schemaObj)) {
                 // $schema 필드는 메타데이터이므로 항상 제거
                 if (key === '$schema') {
@@ -166,6 +174,59 @@ router.post('/chat/completions', async (req, res, next) => {
             } catch (e) {
                 // Best-effort cleanup; ignore any errors here
             }
+
+            // 2) Infer missing type based on shape (Gemini requires explicit types)
+            try {
+                if (!('type' in transformedObj)) {
+                    const looksObject = !!(transformedObj && (transformedObj.properties || transformedObj.required));
+                    const looksArray = !!(transformedObj && (transformedObj.items !== undefined || Array.isArray(transformedObj.prefixItems)));
+                    if (looksObject) {
+                        transformedObj.type = 'object';
+                    } else if (looksArray) {
+                        transformedObj.type = 'array';
+                    }
+                }
+            } catch (_) { /* noop */ }
+
+            // 3) Combinators cleanup: eliminate anyOf/oneOf/allOf by picking a single viable branch
+            try {
+                for (const combKey of ['anyOf','oneOf','allOf']) {
+                    if (Array.isArray(transformedObj[combKey])) {
+                        const isNullish = (node) => {
+                            if (node === null || node === undefined) return true;
+                            if (typeof node !== 'object') return false;
+                            if (Array.isArray(node.enum) && node.enum.length === 1 && node.enum[0] === null) return true;
+                            if (node.type === 'null') return true;
+                            return false;
+                        };
+                        const isEmptySchema = (node) => node && typeof node === 'object' && Object.keys(node).length === 0;
+
+                        // Transform each branch recursively first so they are cleaned too
+                        let branches = transformedObj[combKey]
+                            .filter((sub) => !isNullish(sub))
+                            .map((sub) => isEmptySchema(sub) ? { type: 'object' } : sub)
+                            .map((sub) => transformJsonSchemaFields(sub, currentLevelDefs));
+
+                        if (branches.length === 0) {
+                            branches = [{ type: 'object' }];
+                        }
+
+                        // Prefer an object-typed branch, else take the first
+                        let preferred = branches.find(b => b && b.type === 'object') || branches[0];
+
+                        // Ensure preferred has explicit type if it looks object/array
+                        if (preferred && !preferred.type) {
+                            const looksObject = !!(preferred.properties || preferred.required);
+                            const looksArray = !!(preferred.items !== undefined || Array.isArray(preferred.prefixItems));
+                            if (looksObject) preferred.type = 'object';
+                            else if (looksArray) preferred.type = 'array';
+                        }
+
+                        // Replace the whole current node with the preferred branch ONLY
+                        return preferred;
+                    }
+                }
+            } catch (_) { /* noop */ }
 
             return transformedObj;
         }
@@ -237,6 +298,13 @@ router.post('/chat/completions', async (req, res, next) => {
                     // Parameters cleanup
                     if (fnDecl.parameters) {
                         fnDecl.parameters = transformJsonSchemaFields(fnDecl.parameters);
+                        // Ensure root parameters has explicit type when object-like
+                        try {
+                            const p = fnDecl.parameters;
+                            if (p && !p.type && (p.properties || p.required)) {
+                                fnDecl.parameters.type = 'object';
+                            }
+                        } catch (_) { /* noop */ }
                     }
                     return fnDecl;
                 });
@@ -264,6 +332,12 @@ router.post('/chat/completions', async (req, res, next) => {
 
                 if (tool.function.parameters) {
                     tool.function.parameters = transformJsonSchemaFields(tool.function.parameters);
+                    try {
+                        const p = tool.function.parameters;
+                        if (p && !p.type && (p.properties || p.required)) {
+                            tool.function.parameters.type = 'object';
+                        }
+                    } catch (_) { /* noop */ }
                 }
             }
             return tool;

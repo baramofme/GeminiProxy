@@ -82,7 +82,42 @@ function sanitizeToolParameters(schema, opts = {}) {
                 if (!Array.isArray(s[key])) {
                     s[key] = [s[key]]; logChange(pointer, `wrapped '${key}' into array`);
                 }
+                // First, sanitize each branch
                 s[key] = s[key].map((sub, idx) => sanitize(sub, `${pointer}/${key}/${idx}`));
+
+                // Post-process branches: remove null-only branches, coerce empty schemas to {type:'object'}
+                const isNullOnly = (node) => {
+                    if (!node || typeof node !== 'object') return false;
+                    // enum:[null] or const:null already converted to enum earlier
+                    if (Array.isArray(node.enum) && node.enum.length === 1 && node.enum[0] === null) return true;
+                    if (node.type === 'null') return true;
+                    return false;
+                };
+                const isEmptySchema = (node) => node && typeof node === 'object' && Object.keys(node).length === 0;
+
+                let branches = s[key].filter((sub) => !isNullOnly(sub))
+                                      .map((sub) => (isEmptySchema(sub) ? { type: 'object' } : sub));
+
+                if (branches.length === 0) {
+                    // Fallback: if everything was null-only, just assume object to satisfy Gemini
+                    branches = [{ type: 'object' }];
+                }
+
+                s[key] = branches;
+
+                // If the current node lacks 'type', try to infer from branches (prefer object)
+                if (!('type' in s)) {
+                    const branchTypes = branches.map(b => b && b.type).filter(Boolean);
+                    if (branchTypes.includes('object')) {
+                        s.type = 'object';
+                        logChange(pointer, `inferred type 'object' from ${key} branches`);
+                    } else if (branchTypes.includes('array')) {
+                        s.type = 'array';
+                        logChange(pointer, `inferred type 'array' from ${key} branches`);
+                    }
+                }
+
+                // Optional: if single branch remains, keep as-is (leaving anyOf with 1 item is acceptable)
             }
         }
 
@@ -105,6 +140,19 @@ function sanitizeToolParameters(schema, opts = {}) {
                     logChange(pointer, `unsupported type '${s.type}' dropped`);
                     delete s.type;
                 }
+            }
+        }
+
+        // Infer missing type from schema shape for Gemini strictness
+        if (!('type' in s)) {
+            const looksObject = !!(s && (s.properties || s.required || ('additionalProperties' in s)));
+            const looksArray = !!(s && (s.items !== undefined || Array.isArray(s.prefixItems)));
+            if (looksObject) {
+                s.type = 'object';
+                logChange(pointer, `inferred type 'object' from properties/required/additionalProperties`);
+            } else if (looksArray) {
+                s.type = 'array';
+                logChange(pointer, `inferred type 'array' from items/prefixItems`);
             }
         }
 
@@ -334,6 +382,10 @@ function transformOpenAiToGemini(requestBody, requestedModelId, isSafetyEnabled 
                         parameters = sanitizeToolParameters(parameters);
                     } catch (e) {
                         console.warn(`Failed to sanitize tool parameters for ${tool.function.name}: ${e?.message || e}`);
+                    }
+                    // Defensive: ensure root parameters has explicit type when object-like
+                    if (parameters && !parameters.type && (parameters.properties || parameters.required || ('additionalProperties' in parameters))) {
+                        parameters.type = 'object';
                     }
                 }
 				return {
