@@ -1,0 +1,101 @@
+openapi: 3.0.0
+info:
+  title: GeminiProxy Embedded API
+  version: 1.0.0
+paths:
+  /:
+    post:
+      summary: Proxy Gemini API requests
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                contents:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      parts:
+                        type: array
+                        items:
+                          type: object
+                            properties:
+                              text:
+                                type: string
+                                description: The text content to send to the model.
+                            required:
+                              - text
+                    required:
+                      - parts
+                generationConfig:
+                  type: object
+                  properties:
+                    temperature:
+                      type: number
+                      format: float
+                      description: Controls the randomness of the output.
+                    topP:
+                      type: number
+                      format: float
+                      description: The cumulative probability threshold.
+                    topK:
+                      type: integer
+                      description: The number of top tokens to consider.
+                    maxOutputTokens:
+                      type: integer
+                      description: The maximum number of tokens to generate in the response.
+                safetySettings:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      category:
+                        type: string
+                        enum:
+                          - HARM_CATEGORY_HARASSMENT
+                          - HARM_CATEGORY_HATE_SPEECH
+                          - HARM_CATEGORY_SEXUALLY_EXPLICIT
+                          - HARM_CATEGORY_DANGEROUS_CONTENT
+                        description: The category of harm to filter.
+                      threshold:
+                        type: string
+                        enum:
+                          - BLOCK_LOW_AND_ABOVE
+                          - BLOCK_MEDIUM_AND_ABOVE
+                          - BLOCK_HIGH
+                          - BLOCK_NONE
+                        description: The threshold for blocking content.
+                    required:
+                      - category
+                      - threshold
+              required:
+                - contents
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        content:
+                          type: object
+                          properties:
+                            parts:
+                              type: array
+                              items:
+                                type: object
+                                  properties:
+                                    text:
+                                      type: string
+                                      description: The generated text content.
+                                  required:
+                                    - text

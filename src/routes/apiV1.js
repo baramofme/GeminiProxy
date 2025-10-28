@@ -1,5 +1,6 @@
 // src/routes/apiV1.js
-
+const { OpenAPIV3Validator } = require('express-openapi-validator');
+const path = require('path');
 const express = require('express');
 const { Readable, Transform } = require('stream'); // For handling streams and transforming
 const requireWorkerAuth = require('../middleware/workerAuth');
@@ -1089,6 +1090,47 @@ router.post('/chat/completions', async (req, res, next) => {
         console.error("Error in /v1/chat/completions handler:", error);
         next(error); // Pass error to the global Express error handler
     }
+});
+
+const openApiSpecPath = path.join(__dirname, '../embedded_openapi.yaml');
+
+// OpenAPI 스펙 검증 미들웨어
+const validateMiddleware =  async (req, res, next) => {
+  const validator = new OpenAPIV3Validator({
+    apiSpec: openApiSpecPath,
+    validateRequests: true,
+    validateResponses: false,
+  });
+
+  try {
+    await validator.validate(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+};
+
+router.post('/embedded', validateMiddleware, async (req, res, next) => {
+  try {
+    const result = await geminiProxyService.proxyEmbedded(
+      req.body,
+      req.workerApiKey
+    );
+
+    if (result.error) {
+      // 에러 발생 시
+      console.error("Error handling /embedded:", result.error);
+      return res.status(result.status || 500).json({ error: result.error });
+    }
+
+    // 성공적인 응답
+    const { response: geminiResponse, selectedKeyId, modelCategory } = result;
+    res.setHeader('X-Proxied-By', 'gemini-proxy-panel-node');
+    res.setHeader('X-Selected-Key-ID', selectedKeyId); // Send back which key was used (optional)
+    res.status(geminiResponse.status || 200).send(transformUtils.transformGeminiResponseToOpenAI(geminiResponse.body, requestedModelId));
+  } catch (error) {
+    console.error("Error in /v1/chat/completions handler:", error);
+    next(error); // Pass error to the global Express error handler
+  }
 });
 
 module.exports = router;
