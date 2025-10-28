@@ -2,6 +2,9 @@ const runDb = require('./dbQueryService.js').runDb;
 const getDb = require('./dbQueryService.js').getDb;
 const allDb = require('./dbQueryService.js').allDb;
 
+// dbModule은 외부에서 가져와야 하므로, 이 코드가 작동하려면 필요합니다.
+const dbModule = require('../db');
+
 // Simple queue for serializing database operations
 let dbOperationQueue = Promise.resolve();
 
