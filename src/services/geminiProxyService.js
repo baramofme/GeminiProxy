@@ -526,19 +526,6 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
 
                 const geminiResponse = await fetch(geminiUrl, fetchOptions);
 
-                const rawBody = await geminiResponse.text();
-                let geminiDataForLoggin;
-                try {
-                    geminiDataForLoggin = JSON.parse(rawBody);
-                    console.log("Gemini raw API response:", JSON.stringify(geminiDataForLoggin));
-                } catch (e) {
-                    console.error("Gemini raw API parse error:", rawBody.substring(0, 500));
-                    // 적절한 error 핸들링
-                    return {
-                        error: { message: "Failed to parse Gemini API response" },
-                        status: 502
-                    };
-                }
                 if (!geminiResponse.ok) {
                     const errorBodyText = await geminiResponse.text();
                     lastErrorStatus = geminiResponse.status;
@@ -552,6 +539,18 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
                 }
 
                 const geminiData = await geminiResponse.json();
+
+
+                try {
+                    console.log("Gemini raw API response:", JSON.stringify(geminiData));
+                } catch (e) {
+                    console.error("Gemini raw API parse error:", geminiData.substring(0, 500));
+                    // 적절한 error 핸들링
+                    return {
+                        error: { message: "Failed to parse Gemini API response" },
+                        status: 502
+                    };
+                }
 
                 // 반환 구조 확인 (배치)
                 if (isBatch) {
