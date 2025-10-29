@@ -526,6 +526,9 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
 
                 const geminiResponse = await fetch(geminiUrl, fetchOptions);
 
+                const raw = await geminiResponse.text();
+                console.log("Gemini raw API response:", raw);
+
                 if (!geminiResponse.ok) {
                     const errorBodyText = await geminiResponse.text();
                     lastErrorStatus = geminiResponse.status;
