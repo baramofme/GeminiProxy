@@ -1095,13 +1095,7 @@ router.post('/chat/completions', async (req, res, next) => {
 
 const openApiSpecPath = path.join(__dirname, '../embedded_openapi.yaml');
 
-// OpenAPI 스펙 검증 미들웨어
-// const validateMiddleware =  OpenApiValidator.middleware({
-//     apiSpec: openApiSpecPath,         // OpenAPI YAML/JSON 경로
-//     validateRequests: true,
-//     validateResponses: false,
-// });
-
+// --- router ---
 router.post('/embeddings', async (req, res, next) => {
     try {
         const result = await geminiProxyService.proxyEmbeddings(req.body, req.workerApiKey);
@@ -1123,10 +1117,9 @@ router.post('/embeddings', async (req, res, next) => {
         }
 
         const status = response.status || 200;
-        const body = response.body || {};
-        const requestedModelId = req.body.model;
+        const openAIResponse = response.body;
 
-        const openAIResponse = transformGeminiEmbeddingResponseToOpenAI(body, requestedModelId, req.body.input);
+        // error/data 필드 자체가 transform에서 이미 설정됨
         const isError = openAIResponse.error || (Array.isArray(openAIResponse.data) && openAIResponse.data.length === 0);
 
         res.status(isError ? 502 : status).json(openAIResponse);
