@@ -1,5 +1,5 @@
 // src/routes/apiV1.js
-const { OpenAPIV3Validator } = require('express-openapi-validator');
+const OpenAPIV3Validator = require('express-openapi-validator').OpenApiValidator;
 const path = require('path');
 const express = require('express');
 const { Readable, Transform } = require('stream'); // For handling streams and transforming
