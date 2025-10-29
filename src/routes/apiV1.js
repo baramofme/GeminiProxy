@@ -1,5 +1,5 @@
 // src/routes/apiV1.js
-const OpenAPIV3Validator = require('express-openapi-validator').OpenApiValidator;
+const OpenApiValidator = require('express-openapi-validator');
 const path = require('path');
 const express = require('express');
 const { Readable, Transform } = require('stream'); // For handling streams and transforming
@@ -1095,23 +1095,15 @@ router.post('/chat/completions', async (req, res, next) => {
 const openApiSpecPath = path.join(__dirname, '../embedded_openapi.yaml');
 
 // OpenAPI 스펙 검증 미들웨어
-const validateMiddleware =  async (req, res, next) => {
-  const validator = new OpenAPIV3Validator({
-    apiSpec: openApiSpecPath,
-    validateRequests: true,
-    validateResponses: false,
-  });
+// const validateMiddleware =  OpenApiValidator.middleware({
+//     apiSpec: openApiSpecPath,         // OpenAPI YAML/JSON 경로
+//     validateRequests: true,
+//     validateResponses: false,
+// });
 
+router.post('/embeddings',  async (req, res, next) => {
   try {
-    await validator.validate(req, res, next);
-  } catch (err) {
-    next(err);
-  }
-};
-
-router.post('/embeddings', validateMiddleware, async (req, res, next) => {
-  try {
-    const result = await geminiProxyService.proxyEmbedded(
+    const result = await geminiProxyService.proxyEmbeddings(
       req.body,
       req.workerApiKey
     );
