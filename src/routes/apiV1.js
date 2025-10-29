@@ -1116,8 +1116,10 @@ router.post('/embeddings',  async (req, res, next) => {
 
     // 성공적인 응답
     const { response: geminiResponse, selectedKeyId, modelCategory } = result;
-    res.setHeader('X-Proxied-By', 'gemini-proxy-panel-node');
-    res.setHeader('X-Selected-Key-ID', selectedKeyId); // Send back which key was used (optional)
+      res.setHeader('X-Proxied-By', 'gemini-proxy-panel-node');
+      if (selectedKeyId !== undefined && selectedKeyId !== null) {
+          res.setHeader('X-Selected-Key-ID', selectedKeyId);
+      } // Send back which key was used (optional)
     res.status(geminiResponse.status || 200).send(transformUtils.transformGeminiResponseToOpenAI(geminiResponse.body, requestedModelId));
   } catch (error) {
     console.error("Error in /v1/embeddings handler:", error);
