@@ -1126,7 +1126,7 @@ router.post('/embeddings', async (req, res, next) => {
         const body = response.body || {};
         const requestedModelId = req.body.model;
 
-        const openAIResponse = transformGeminiEmbeddingResponseToOpenAI(body, requestedModelId);
+        const openAIResponse = transformGeminiEmbeddingResponseToOpenAI(body, requestedModelId, req.body.input);
         const isError = openAIResponse.error || (Array.isArray(openAIResponse.data) && openAIResponse.data.length === 0);
 
         res.status(isError ? 502 : status).json(openAIResponse);

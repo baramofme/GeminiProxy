@@ -725,91 +725,82 @@ function transformGeminiResponseToOpenAI(geminiResponse, modelId) {
  * @param {string} modelId - OpenAI embedding compatible API의 모델 ID
  * @returns {object} OpenAI Embedding API 스펙 결과 or error 포함 구조
  */
-function transformGeminiEmbeddingResponseToOpenAI(geminiResponse, modelId) {
-    try {
-        // --- 배치 임베딩 (embeddings: Array) ---
-        if (Array.isArray(geminiResponse.embeddings)) {
-            const dataArr = geminiResponse.embeddings.map((emb, idx) => ({
-                object: "embedding",
-                embedding: Array.isArray(emb.values) ? emb.values : [],
-                index: idx,
-            }));
-
-            // 빈 벡터 (배치에서도 0)
-            if (dataArr.length === 0) {
-                return {
-                    object: "list",
-                    data: [],
-                    model: modelId,
-                    usage: {
-                        prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
-                        total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
-                    },
-                    error: { message: "No embeddings generated from Gemini batch API." }
-                };
-            }
-            // 구성된 embedding 결과들
-            return {
-                object: "list",
-                data: dataArr,
-                model: modelId,
-                usage: {
-                    prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
-                    total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
-                }
-            };
-        }
-
-        // --- 단일 임베딩 (embedding: {values}) ---
-        if (geminiResponse.embedding && Array.isArray(geminiResponse.embedding.values)) {
-            const valuesArr = geminiResponse.embedding.values;
-            if (!Array.isArray(valuesArr) || valuesArr.length === 0) {
-                return {
-                    object: "list",
-                    data: [],
-                    model: modelId,
-                    usage: {
-                        prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
-                        total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
-                    },
-                    error: { message: "Empty embedding vector returned from Gemini single API." }
-                };
-            }
-            return {
-                object: "list",
-                data: [{
-                    object: "embedding",
-                    embedding: valuesArr,
-                    index: 0,
-                }],
-                model: modelId,
-                usage: {
-                    prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
-                    total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
-                }
-            };
-        }
-
-        // --- 응답 구조 불일치 (없는 경우) ---
+function transformGeminiEmbeddingResponseToOpenAI(geminiResponse, modelId, originalInput) {
+    // 1. 입력 유효성 검사
+    function isInputValid(input) {
+        if (typeof input === 'string') return input.trim().length >= 5;
+        if (Array.isArray(input)) return input.some(x => typeof x === 'string' && x.trim().length >= 5);
+        return false;
+    }
+    // 만약 originalInput이 인자로 전달된다면(권장)
+    if (originalInput && !isInputValid(originalInput)) {
         return {
             object: "list",
             data: [],
             model: modelId,
             usage: { prompt_tokens: 0, total_tokens: 0 },
-            error: { message: "Invalid Gemini embedding response structure." }
-        };
-
-    } catch (e) {
-        // --- JSON 파싱/알 수 없는 예외 발생시 ---
-        return {
-            object: "list",
-            data: [],
-            model: modelId,
-            usage: { prompt_tokens: 0, total_tokens: 0 },
-            error: { message: `Exception during Gemini embedding transform: ${e.message}` }
+            error: { message: 'Input too short or lacks semantic content for embedding.' }
         };
     }
+
+    // 2. Gemini 응답 컨버팅 및 구조 검사
+    if (Array.isArray(geminiResponse.embeddings)) {
+        const dataArr = geminiResponse.embeddings.map((emb, idx) => ({
+            object: "embedding",
+            embedding: Array.isArray(emb.values) ? emb.values : [],
+            index: idx,
+        }));
+        if (dataArr.length === 0) {
+            return {
+                object: "list",
+                data: [],
+                model: modelId,
+                usage: { prompt_tokens: 0, total_tokens: 0 },
+                error: { message: "Gemini returned empty embeddings for this input." }
+            };
+        }
+        return {
+            object: "list",
+            data: dataArr,
+            model: modelId,
+            usage: { prompt_tokens: 0, total_tokens: 0 }
+        };
+    }
+    if (
+        geminiResponse.embedding &&
+        Array.isArray(geminiResponse.embedding.values)
+    ) {
+        const valuesArr = geminiResponse.embedding.values;
+        if (valuesArr.length === 0) {
+            return {
+                object: "list",
+                data: [],
+                model: modelId,
+                usage: { prompt_tokens: 0, total_tokens: 0 },
+                error: { message: "Gemini returned empty embedding vector." }
+            };
+        }
+        return {
+            object: "list",
+            data: [{
+                object: "embedding",
+                embedding: valuesArr,
+                index: 0
+            }],
+            model: modelId,
+            usage: { prompt_tokens: 0, total_tokens: 0 }
+        };
+    }
+    // 3. 구조 불일치 등 기타 예외
+    return {
+        object: "list",
+        data: [],
+        model: modelId,
+        usage: { prompt_tokens: 0, total_tokens: 0 },
+        error: { message: "Invalid Gemini embedding response structure." }
+    };
 }
+
 
 
 module.exports = {
