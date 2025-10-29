@@ -1109,7 +1109,7 @@ const validateMiddleware =  async (req, res, next) => {
   }
 };
 
-router.post('/embedded', validateMiddleware, async (req, res, next) => {
+router.post('/embeddings', validateMiddleware, async (req, res, next) => {
   try {
     const result = await geminiProxyService.proxyEmbedded(
       req.body,
@@ -1118,7 +1118,7 @@ router.post('/embedded', validateMiddleware, async (req, res, next) => {
 
     if (result.error) {
       // 에러 발생 시
-      console.error("Error handling /embedded:", result.error);
+      console.error("Error handling /embeddings:", result.error);
       return res.status(result.status || 500).json({ error: result.error });
     }
 
@@ -1128,7 +1128,7 @@ router.post('/embedded', validateMiddleware, async (req, res, next) => {
     res.setHeader('X-Selected-Key-ID', selectedKeyId); // Send back which key was used (optional)
     res.status(geminiResponse.status || 200).send(transformUtils.transformGeminiResponseToOpenAI(geminiResponse.body, requestedModelId));
   } catch (error) {
-    console.error("Error in /v1/chat/completions handler:", error);
+    console.error("Error in /v1/embeddings handler:", error);
     next(error); // Pass error to the global Express error handler
   }
 });
