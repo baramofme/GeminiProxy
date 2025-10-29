@@ -1120,7 +1120,12 @@ router.post('/embeddings',  async (req, res, next) => {
       if (selectedKeyId !== undefined && selectedKeyId !== null) {
           res.setHeader('X-Selected-Key-ID', selectedKeyId);
       } // Send back which key was used (optional)
-    res.status(geminiResponse.status || 200).send(transformUtils.transformGeminiResponseToOpenAI(geminiResponse.body, requestedModelId));
+
+      const status = geminiResponse && geminiResponse.status ? geminiResponse.status : 200;
+      const body = geminiResponse && geminiResponse.body ? geminiResponse.body : {};
+      const requestedModelId = geminiResponse && geminiResponse.model ? geminiResponse.model : {};
+
+      res.status(status).send(transformUtils.transformGeminiResponseToOpenAI(body, requestedModelId));
   } catch (error) {
     console.error("Error in /v1/embeddings handler:", error);
     next(error); // Pass error to the global Express error handler
