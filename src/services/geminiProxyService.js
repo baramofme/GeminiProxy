@@ -542,7 +542,7 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
 
 
                 try {
-                    console.log("Gemini raw API response:", JSON.stringify(geminiData));
+                    console.log("[DBG] geminiData:", JSON.stringify(geminiData));
                 } catch (e) {
                     console.error("Gemini raw API parse error:", geminiData.substring(0, 500));
                     // 적절한 error 핸들링
@@ -551,6 +551,11 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
                         status: 502
                     };
                 }
+
+                // console.log('[DBG] geminiData:', JSON.stringify(geminiData));
+                console.log('[DBG] input:', JSON.stringify(input));
+                console.log('[DBG] isBatch:', isBatch);
+                console.log('[DBG] geminiData.embeddings:', Array.isArray(geminiData.embeddings), geminiData.embeddings?.length);
 
                 // 반환 구조 확인 (배치)
                 if (isBatch) {
