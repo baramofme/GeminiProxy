@@ -1099,28 +1099,40 @@ const openApiSpecPath = path.join(__dirname, '../embedded_openapi.yaml');
 router.post('/embeddings', async (req, res, next) => {
     try {
         const result = await geminiProxyService.proxyEmbeddings(req.body, req.workerApiKey);
-
         if (result.error) {
             console.error("Error handling /embeddings:", result.error);
-            return res.status(result.status || 500).json({ error: result.error });
+            return res.status(result.status || 500).json({
+                object: 'list',
+                data: [],
+                error: result.error,
+                usage: { prompt_tokens: 0, total_tokens: 0 }
+            });
         }
 
         const { response, selectedKeyId } = result;
         if (!response) {
             console.error("Invalid Gemini response structure:", result);
-            return res.status(502).json({ error: "Invalid Gemini response structure", raw: result });
+            return res.status(502).json({
+                object: 'list',
+                data: [],
+                error: { message: "Invalid Gemini response structure" },
+                usage: { prompt_tokens: 0, total_tokens: 0 }
+            });
         }
+
+        const openAIResponse = response.body || {};
+        const status = response.status || 200;
+        // 일관된 usage 필드 보장
+        if (!openAIResponse.usage) openAIResponse.usage = { prompt_tokens: 0, total_tokens: 0 };
+        // object/data 기본값 보장
+        if (!openAIResponse.object) openAIResponse.object = "list";
+        if (!Array.isArray(openAIResponse.data)) openAIResponse.data = [];
 
         res.setHeader('X-Proxied-By', 'gemini-proxy-panel-node');
-        if (selectedKeyId != null) {
-            res.setHeader('X-Selected-Key-ID', selectedKeyId);
-        }
+        if (selectedKeyId != null) res.setHeader('X-Selected-Key-ID', selectedKeyId);
 
-        const status = response.status || 200;
-        const openAIResponse = response.body;
-
-        // error/data 필드 자체가 transform에서 이미 설정됨
-        const isError = openAIResponse.error || (Array.isArray(openAIResponse.data) && openAIResponse.data.length === 0);
+        // isError 분기는 탑레벨 error 존재 OR data empty
+        const isError = openAIResponse.error || openAIResponse.data.length === 0;
 
         res.status(isError ? 502 : status).json(openAIResponse);
     } catch (error) {
@@ -1128,6 +1140,7 @@ router.post('/embeddings', async (req, res, next) => {
         next(error);
     }
 });
+
 
 
 module.exports = router;
