@@ -1101,35 +1101,38 @@ const openApiSpecPath = path.join(__dirname, '../embedded_openapi.yaml');
 //     validateResponses: false,
 // });
 
-router.post('/embeddings',  async (req, res, next) => {
-  try {
-    const result = await geminiProxyService.proxyEmbeddings(
-      req.body,
-      req.workerApiKey
-    );
+router.post('/embeddings', async (req, res, next) => {
+    try {
+        const result = await geminiProxyService.proxyEmbeddings(req.body, req.workerApiKey);
 
-    if (result.error) {
-      // 에러 발생 시
-      console.error("Error handling /embeddings:", result.error);
-      return res.status(result.status || 500).json({ error: result.error });
+        if (result.error) {
+            console.error("Error handling /embeddings:", result.error);
+            return res.status(result.status || 500).json({ error: result.error });
+        }
+
+        const { response, selectedKeyId } = result;
+        if (!response) {
+            console.error("Invalid Gemini response structure:", result);
+            return res.status(502).json({ error: "Invalid Gemini response structure", raw: result });
+        }
+
+        res.setHeader('X-Proxied-By', 'gemini-proxy-panel-node');
+        if (selectedKeyId != null) {
+            res.setHeader('X-Selected-Key-ID', selectedKeyId);
+        }
+
+        const status = response.status || 200;
+        const body = response.body || {};
+        const requestedModelId = req.body.model;
+
+        res.status(status).send(
+            transformUtils.transformGeminiEmbeddingResponseToOpenAI(body, requestedModelId)
+        );
+    } catch (error) {
+        console.error("Error in /v1/embeddings handler:", error);
+        next(error);
     }
-
-    // 성공적인 응답
-    const { response: geminiResponse, selectedKeyId, modelCategory } = result;
-      res.setHeader('X-Proxied-By', 'gemini-proxy-panel-node');
-      if (selectedKeyId !== undefined && selectedKeyId !== null) {
-          res.setHeader('X-Selected-Key-ID', selectedKeyId);
-      } // Send back which key was used (optional)
-
-      const status = geminiResponse && geminiResponse.status ? geminiResponse.status : 200;
-      const body = geminiResponse && geminiResponse.body ? geminiResponse.body : {};
-      const requestedModelId = geminiResponse && geminiResponse.model ? geminiResponse.model : {};
-
-      res.status(status).send(transformUtils.transformGeminiResponseToOpenAI(body, requestedModelId));
-  } catch (error) {
-    console.error("Error in /v1/embeddings handler:", error);
-    next(error); // Pass error to the global Express error handler
-  }
 });
+
 
 module.exports = router;
