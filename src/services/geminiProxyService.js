@@ -526,9 +526,13 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
 
                 const geminiResponse = await fetch(geminiUrl, fetchOptions);
 
-                const raw = await geminiResponse.json();
-                // 너무 많으느 줄이 로그에 찍혀서, 압축해서 보여주려고 문자열로함
-                console.log("Gemini raw API response:", JSON.stringify(raw));
+                const rawBody = await geminiResponse.text();
+                try {
+                    const compact = JSON.stringify(JSON.parse(rawBody));
+                    console.log("Gemini raw API response:", compact); // 반드시 한 줄
+                } catch (e) {
+                    console.log("Gemini raw API response (parse error):", rawBody); // 비정상 값은 그대로 보임
+                }
 
                 if (!geminiResponse.ok) {
                     const errorBodyText = await geminiResponse.text();
