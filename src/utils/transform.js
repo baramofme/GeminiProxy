@@ -725,20 +725,35 @@ function transformGeminiResponseToOpenAI(geminiResponse, modelId) {
  * @param {string} modelId - 요청된 모델명 (OpenAI embedding API 기준)
  * @returns {object} OpenAI Embedding API 포맷 객체
  */
+/**
+ * Gemini Embedding API 응답을 OpenAI Embedding API 결과 구조로 변환
+ * @param {object} geminiResponse - Gemini에서 받은 원본 embedding 응답(JSON)
+ * @param {string} modelId - 요청된 모델명 (OpenAI embedding API 기준)
+ * @returns {object} OpenAI Embedding API 포맷 객체
+ */
 function transformGeminiEmbeddingResponseToOpenAI(geminiResponse, modelId) {
     try {
-        // 배치 요청 여부 판별
-        const isBatch =
-            Array.isArray(geminiResponse.embeddings) && geminiResponse.embeddings.length > 0;
-
-        // 배치 변환
-        if (isBatch) {
-            // embeddings: [{values: [...], ...}, ...]
+        // --- 배치 임베딩 ---
+        if (Array.isArray(geminiResponse.embeddings)) {
             const dataArr = geminiResponse.embeddings.map((emb, idx) => ({
                 object: "embedding",
                 embedding: Array.isArray(emb.values) ? emb.values : [],
                 index: idx
             }));
+
+            // 빈 배열이면 error structure 포함
+            if (dataArr.length === 0) {
+                return {
+                    object: "list",
+                    data: [],
+                    model: modelId,
+                    usage: {
+                        prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
+                        total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
+                    },
+                    error: { message: "No embeddings generated from Gemini batch API." }
+                };
+            }
 
             return {
                 object: "list",
@@ -747,30 +762,41 @@ function transformGeminiEmbeddingResponseToOpenAI(geminiResponse, modelId) {
                 usage: {
                     prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
                     total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
-                },
+                }
             };
         }
 
-        // 단일 임베딩 결과
+        // --- 단일 임베딩 ---
         if (geminiResponse.embedding && Array.isArray(geminiResponse.embedding.values)) {
+            const valuesArr = geminiResponse.embedding.values;
+            if (!Array.isArray(valuesArr) || valuesArr.length === 0) {
+                return {
+                    object: "list",
+                    data: [],
+                    model: modelId,
+                    usage: {
+                        prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
+                        total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
+                    },
+                    error: { message: "Empty embedding vector returned from Gemini single API." }
+                };
+            }
             return {
                 object: "list",
-                data: [
-                    {
-                        object: "embedding",
-                        embedding: geminiResponse.embedding.values,
-                        index: 0,
-                    },
-                ],
+                data: [{
+                    object: "embedding",
+                    embedding: valuesArr,
+                    index: 0
+                }],
                 model: modelId,
                 usage: {
                     prompt_tokens: geminiResponse.usageMetadata?.promptTokenCount || 0,
                     total_tokens: geminiResponse.usageMetadata?.totalTokenCount || 0,
-                },
+                }
             };
         }
 
-        // 예외/구조 불일치: OpenAI 오류구조 (에러 응답)
+        // --- 구조 불일치 오류 ---
         return {
             object: "list",
             data: [],
@@ -779,17 +805,19 @@ function transformGeminiEmbeddingResponseToOpenAI(geminiResponse, modelId) {
             error: { message: "Invalid Gemini embedding response structure." }
         };
     } catch (e) {
-        console.error("Error transforming Gemini embedding response:", e, "Response:", geminiResponse);
-        // OpenAI embedding error-style 응답 구조
+        // --- 예외 발생시 오류 structure ---
         return {
             object: "list",
             data: [],
             model: modelId,
             usage: { prompt_tokens: 0, total_tokens: 0 },
-            error: { message: `Error processing Gemini embedding response: ${e.message}` }
+            error: { message: `Exception during Gemini embedding transform: ${e.message}` }
         };
     }
 }
+
+module.exports = { transformGeminiEmbeddingResponseToOpenAI };
+
 
 
 module.exports = {
