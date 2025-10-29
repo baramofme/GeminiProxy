@@ -441,6 +441,7 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
     const requestedModelId = openAIRequestBody?.model;
     const input = openAIRequestBody?.input;
 
+    // --- 입력 필드 예외 방어 ---
     if (!requestedModelId) {
         return { error: { message: "Missing 'model' field in request body" }, status: 400 };
     }
@@ -451,6 +452,7 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
         return { error: { message: "'input' must be a string or an array of strings." }, status: 400 };
     }
     if (Array.isArray(input) && input.length === 0) {
+        // 빈 요청은 항상 data: [] 반환
         return {
             response: {
                 body: {
@@ -461,6 +463,7 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
                         prompt_tokens: 0,
                         total_tokens: 0,
                     },
+                    error: { message: 'Input is empty array.' }
                 },
                 status: 200,
             },
@@ -531,59 +534,117 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
                     } catch {
                         lastError = { message: errorBodyText };
                     }
-                    // Key 관리 로직과 상태 기록 등 추가 (생략)
                     if (attempt < MAX_RETRIES) continue;
                     break;
                 }
 
                 const geminiData = await geminiResponse.json();
-                // 반환 구조 확인 (방어적 체크)
-                let openAIResponseData;
+
+                // 반환 구조 확인 (배치)
                 if (isBatch) {
                     if (!Array.isArray(geminiData.embeddings)) {
-                        return { error: { message: 'Invalid Gemini batch embedding response structure' }, status: 502 };
+                        return {
+                            response: {
+                                body: {
+                                    object: "list",
+                                    data: [],
+                                    model: requestedModelId,
+                                    usage: { prompt_tokens: 0, total_tokens: 0 },
+                                    error: { message: 'Invalid Gemini batch embedding response structure' }
+                                },
+                                status: 502
+                            },
+                            selectedKeyId: selectedKey?.id,
+                            modelCategory,
+                        };
                     }
-                    openAIResponseData = {
-                        object: "list",
-                        data: geminiData.embeddings.map((emb, index) => ({
-                            object: "embedding",
-                            embedding: emb.values,
-                            index: index
-                        })),
-                        model: requestedModelId,
-                        usage: {
-                            prompt_tokens: 0,
-                            total_tokens: 0
-                        }
+                    // 빈 배열도 error로 처리
+                    if (geminiData.embeddings.length === 0) {
+                        return {
+                            response: {
+                                body: {
+                                    object: "list",
+                                    data: [],
+                                    model: requestedModelId,
+                                    usage: { prompt_tokens: 0, total_tokens: 0 },
+                                    error: { message: 'Gemini returned empty embeddings.' }
+                                },
+                                status: 502
+                            },
+                            selectedKeyId: selectedKey?.id,
+                            modelCategory,
+                        };
+                    }
+                    // 정상
+                    return {
+                        response: {
+                            body: {
+                                object: "list",
+                                data: geminiData.embeddings.map((emb, index) => ({
+                                    object: "embedding",
+                                    embedding: emb.values,
+                                    index: index
+                                })),
+                                model: requestedModelId,
+                                usage: { prompt_tokens: 0, total_tokens: 0 }
+                            },
+                            status: 200,
+                        },
+                        selectedKeyId: selectedKey?.id,
+                        modelCategory,
                     };
                 } else {
                     if (!geminiData.embedding || !Array.isArray(geminiData.embedding.values)) {
-                        return { error: { message: 'Invalid Gemini single embedding response structure' }, status: 502 };
+                        return {
+                            response: {
+                                body: {
+                                    object: "list",
+                                    data: [],
+                                    model: requestedModelId,
+                                    usage: { prompt_tokens: 0, total_tokens: 0 },
+                                    error: { message: 'Invalid Gemini single embedding response structure' }
+                                },
+                                status: 502
+                            },
+                            selectedKeyId: selectedKey?.id,
+                            modelCategory,
+                        };
                     }
-                    openAIResponseData = {
-                        object: "list",
-                        data: [{
-                            object: "embedding",
-                            embedding: geminiData.embedding.values,
-                            index: 0
-                        }],
-                        model: requestedModelId,
-                        usage: {
-                            prompt_tokens: 0,
-                            total_tokens: 0
-                        }
+                    if (geminiData.embedding.values.length === 0) {
+                        return {
+                            response: {
+                                body: {
+                                    object: "list",
+                                    data: [],
+                                    model: requestedModelId,
+                                    usage: { prompt_tokens: 0, total_tokens: 0 },
+                                    error: { message: 'Gemini returned empty embedding vector.' }
+                                },
+                                status: 502
+                            },
+                            selectedKeyId: selectedKey?.id,
+                            modelCategory,
+                        };
+                    }
+                    // 정상
+                    return {
+                        response: {
+                            body: {
+                                object: "list",
+                                data: [{
+                                    object: "embedding",
+                                    embedding: geminiData.embedding.values,
+                                    index: 0
+                                }],
+                                model: requestedModelId,
+                                usage: { prompt_tokens: 0, total_tokens: 0 }
+                            },
+                            status: 200,
+                        },
+                        selectedKeyId: selectedKey?.id,
+                        modelCategory,
                     };
                 }
-
-                // 일관된 리턴 구조
-                return {
-                    response: {
-                        body: openAIResponseData,
-                        status: 200,
-                    },
-                    selectedKeyId: selectedKey?.id,
-                    modelCategory,
-                };
 
             } catch (fetchError) {
                 lastError = { message: `Internal Proxy Error during attempt ${attempt}: ${fetchError.message}`, type: 'proxy_internal_error' };
