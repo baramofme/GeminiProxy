@@ -527,13 +527,18 @@ async function proxyEmbeddings(openAIRequestBody, workerApiKey) {
                 const geminiResponse = await fetch(geminiUrl, fetchOptions);
 
                 const rawBody = await geminiResponse.text();
+                let geminiData;
                 try {
-                    const compact = JSON.stringify(JSON.parse(rawBody));
-                    console.log("Gemini raw API response:", compact); // 반드시 한 줄
+                    geminiData = JSON.parse(rawBody);
+                    console.log("Gemini raw API response:", JSON.stringify(geminiData));
                 } catch (e) {
-                    console.log("Gemini raw API response (parse error):", rawBody); // 비정상 값은 그대로 보임
+                    console.error("Gemini raw API parse error:", rawBody.substring(0, 500));
+                    // 적절한 error 핸들링
+                    return {
+                        error: { message: "Failed to parse Gemini API response" },
+                        status: 502
+                    };
                 }
-
                 if (!geminiResponse.ok) {
                     const errorBodyText = await geminiResponse.text();
                     lastErrorStatus = geminiResponse.status;
