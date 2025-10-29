@@ -10,6 +10,7 @@ const transformUtils = require('../utils/transform');
 
 // Import vertexProxyService, which now includes manual loading logic
 const vertexProxyService = require('../services/vertexProxyService');
+const {transformGeminiEmbeddingResponseToOpenAI} = require("../utils/transform");
 
 const router = express.Router();
 
